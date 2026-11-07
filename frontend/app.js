@@ -1,0 +1,315 @@
+(() => {
+  'use strict';
+
+  const API_BASE =
+    window.GHOSTBUSTER_API_BASE ?? (location.protocol === 'file:' ? 'http://127.0.0.1:8000' : '');
+  const DEMO_COORDS = Object.freeze({ lat: 51.8988, lon: -8.4715, label: 'Patrick Street, Cork' });
+  const SCORE_MIN = 300;
+  const SCORE_MAX = 850;
+  const DEMO_STORAGE_KEY = 'ghostbuster.demo';
+
+  const TIER = {
+    prime: { color: '#22c55e', text: 'text-emerald-400', bg: 'bg-emerald-500/15', name: 'PRIME' },
+    near_prime: { color: '#f59e0b', text: 'text-amber-400', bg: 'bg-amber-500/15', name: 'NEAR-PRIME' },
+    subprime: { color: '#ef4444', text: 'text-red-400', bg: 'bg-red-500/15', name: 'SUBPRIME' },
+  };
+
+  const SCENARIOS = {
+    live: null,
+    am_peak: { hour: 8, dow: 1 },
+    pm_peak: { hour: 17, dow: 3 },
+    late: { hour: 1, dow: 5 },
+    sunday: { hour: 11, dow: 6 },
+  };
+
+  const state = { demo: false, seq: 0 };
+  const $ = (id) => document.getElementById(id);
+
+  const esc = (value) =>
+    String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  const fmtDist = (m) => (m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`);
+
+  function ringSVG({ score, tier, size, stroke, scoreFont, caption }) {
+    const view = 160;
+    const r = (view - stroke) / 2 - 2;
+    const c = 2 * Math.PI * r;
+    const frac = Math.min(1, Math.max(0, (score - SCORE_MIN) / (SCORE_MAX - SCORE_MIN)));
+    const color = (TIER[tier] || TIER.near_prime).color;
+    const textY = (caption ? 74 : 80) + scoreFont * 0.35;
+    const captionEl = caption
+      ? `<text x="80" y="${textY + 24}" text-anchor="middle" font-size="12" letter-spacing="2" fill="#94a3b8">${esc(caption)}</text>`
+      : '';
+    return `
+      <svg viewBox="0 0 ${view} ${view}" width="${size}" height="${size}" role="img" aria-label="Stop credit score ${score}">
+        <circle cx="80" cy="80" r="${r}" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="${stroke}" />
+        <circle class="ring-progress" cx="80" cy="80" r="${r}" fill="none" stroke="${color}"
+          stroke-width="${stroke}" stroke-linecap="round" stroke-dasharray="${c} ${c}" stroke-dashoffset="${c}"
+          data-offset="${c * (1 - frac)}" transform="rotate(-90 80 80)"
+          style="filter: drop-shadow(0 0 8px ${color}88)" />
+        <text x="80" y="${textY}" text-anchor="middle" font-size="${scoreFont}" font-weight="800" fill="#f8fafc">${score}</text>
+        ${captionEl}
+      </svg>`;
+  }
+
+  function animateRings(root) {
+    const rings = root.querySelectorAll('.ring-progress');
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => rings.forEach((el) => (el.style.strokeDashoffset = el.dataset.offset)))
+    );
+  }
+
+  function setNotice(html, kind = 'error') {
+    const box = $('notice');
+    if (!html) {
+      box.className = 'mb-4 hidden';
+      box.innerHTML = '';
+      return;
+    }
+    const palette =
+      kind === 'error'
+        ? 'border-red-500/40 bg-red-500/10 text-red-200'
+        : 'border-sky-500/40 bg-sky-500/10 text-sky-200';
+    box.className = `mb-4 rounded-2xl border px-4 py-3 text-sm ${palette}`;
+    box.innerHTML = html;
+  }
+
+  function renderLoading() {
+    $('score-card').innerHTML = `
+      <div class="space-y-4">
+        <div class="skeleton h-5 w-2/3"></div>
+        <div class="skeleton mx-auto h-48 w-48 !rounded-full"></div>
+        <div class="skeleton h-4 w-full"></div>
+        <div class="skeleton h-4 w-3/4"></div>
+      </div>`;
+    $('alternatives').innerHTML = `<div class="space-y-3"><div class="skeleton h-20 w-full"></div><div class="skeleton h-20 w-full"></div></div>`;
+    $('context').innerHTML = '';
+  }
+
+  function renderSourcePill(source, coords) {
+    const pill = $('source-pill');
+    if (source === 'demo') {
+      pill.className = 'rounded-full bg-amber-500 px-4 py-2 text-xs font-bold text-slate-950';
+      pill.textContent = `STAGE DEMO · ${DEMO_COORDS.label}`;
+    } else {
+      pill.className = 'glass rounded-full px-4 py-2 text-xs font-medium text-emerald-300';
+      pill.textContent = `Live GPS · ${coords.lat.toFixed(4)}, ${coords.lon.toFixed(4)}`;
+    }
+  }
+
+  function renderResult(d, source, coords) {
+    const t = TIER[d.tier] || TIER.near_prime;
+    const routes = d.stop.routes.map((r) => `<span class="rounded-md bg-white/10 px-2 py-0.5 text-xs font-semibold">${esc(r)}</span>`).join(' ');
+    $('score-card').innerHTML = `
+      <div class="fade-in text-center">
+        <p class="text-xs font-semibold uppercase tracking-widest text-slate-400">Nearest stop · ${esc(fmtDist(d.distance_m))} away</p>
+        <h2 class="mt-1 text-2xl font-extrabold">${esc(d.stop.name)}</h2>
+        <p class="text-sm text-slate-400">${esc(d.stop.city)}</p>
+        <div class="mt-2 flex flex-wrap justify-center gap-1.5">${routes}</div>
+        <div class="mx-auto mt-5 w-fit">${ringSVG({ score: d.score, tier: d.tier, size: 220, stroke: 14, scoreFont: 46, caption: 'STOP CREDIT SCORE' })}</div>
+        <div class="mt-1 flex justify-between px-10 text-[10px] font-medium text-slate-500"><span>${SCORE_MIN}</span><span>${SCORE_MAX}</span></div>
+        <div class="mt-3 inline-flex items-center gap-2 rounded-full ${t.bg} px-4 py-1.5 text-sm font-bold ${t.text}">
+          <span class="h-2 w-2 rounded-full" style="background:${t.color}"></span>${esc(t.name)} · ${esc(d.tier_label)}
+        </div>
+        <p class="mt-3 text-sm text-slate-300"><span class="font-semibold ${t.text}">${Math.round(d.ghost_probability * 100)}%</span> chance of a ghost bus</p>
+        <p class="mt-3 rounded-xl bg-white/5 p-3 text-sm leading-relaxed text-slate-200">${esc(d.advice)}</p>
+      </div>`;
+
+    const alt = $('alternatives');
+    if (d.alternatives_triggered && d.alternatives.length) {
+      alt.innerHTML = `<ul class="space-y-3">${d.alternatives
+        .map(
+          (a) => `
+        <li class="fade-in flex items-center gap-4 rounded-2xl bg-white/5 p-3 ring-1 ring-white/5">
+          <div class="shrink-0">${ringSVG({ score: a.score, tier: a.tier, size: 68, stroke: 16, scoreFont: 56 })}</div>
+          <div class="min-w-0 flex-1">
+            <p class="truncate font-semibold">${esc(a.stop.name)}</p>
+            <p class="text-xs text-slate-400">${a.walk_minutes} min walk · ${esc(fmtDist(a.distance_m))} · routes ${esc(a.stop.routes.join(', '))}</p>
+            <p class="text-xs ${(TIER[a.tier] || TIER.near_prime).text}">${esc(a.tier_label)}</p>
+          </div>
+          <div class="text-right"><p class="text-lg font-extrabold text-emerald-400">+${a.score_gain}</p><p class="text-[10px] uppercase tracking-wider text-slate-500">points</p></div>
+        </li>`
+        )
+        .join('')}</ul>`;
+    } else if (d.alternatives_triggered) {
+      alt.innerHTML = `<div class="rounded-2xl bg-white/5 p-4 text-sm text-slate-300">No materially better stop within walking distance. Build in extra time or plan a backup mode.</div>`;
+    } else {
+      alt.innerHTML = `<div class="rounded-2xl bg-white/5 p-4 text-sm text-slate-300">This stop is not subprime, so no re-routing is needed. Try the <span class="font-semibold">Thu 17:00</span> scenario with <span class="font-semibold">Heavy rain</span> to see alternatives activate.</div>`;
+    }
+
+    const c = d.context;
+    const chip = (text, cls = 'bg-white/5 text-slate-300') => `<span class="rounded-full px-3 py-1 ${cls}">${text}</span>`;
+    $('context').innerHTML = [
+      chip(`🕒 ${esc(c.local_time_label)}`),
+      chip(c.heavy_rain ? '🌧️ Heavy rain' : '☀️ No heavy rain', c.heavy_rain ? 'bg-sky-500/15 text-sky-300' : 'bg-white/5 text-slate-300'),
+      c.simulated ? chip('Simulated time', 'bg-violet-500/15 text-violet-300') : chip('Live time'),
+    ].join('');
+
+    renderSourcePill(source, coords);
+    animateRings($('score-card'));
+    animateRings($('alternatives'));
+  }
+
+  function renderError(message) {
+    $('score-card').innerHTML = `<div class="py-10 text-center"><p class="text-4xl">⚠️</p><p class="mt-3 font-semibold">Couldn't load a score</p><p class="mt-1 text-sm text-slate-400">${esc(message)}</p></div>`;
+    $('alternatives').innerHTML = '';
+    $('context').innerHTML = '';
+    setNotice(esc(message));
+  }
+
+  function renderGeoFailure(message) {
+    $('score-card').innerHTML = `
+      <div class="py-8 text-center">
+        <p class="text-4xl">📍</p>
+        <p class="mt-3 font-semibold">Location unavailable</p>
+        <p class="mt-1 text-sm text-slate-400">${esc(message)}</p>
+        <button type="button" data-action="enable-demo" class="mt-5 rounded-xl bg-amber-500 px-5 py-3 text-sm font-bold text-slate-950 hover:bg-amber-400">Switch to Stage Demo Mode</button>
+      </div>`;
+    $('alternatives').innerHTML = '';
+    $('context').innerHTML = '';
+    $('source-pill').className = 'glass rounded-full px-4 py-2 text-xs font-medium text-red-300';
+    $('source-pill').textContent = 'No location';
+  }
+
+  function geoMessage(err) {
+    if (!err) return 'Unknown location error.';
+    if (err.code === 1) return 'Location permission was denied. Allow access in your browser, or use Stage Demo Mode.';
+    if (err.code === 2) return 'Your position could not be determined (no signal).';
+    if (err.code === 3) return 'Locating timed out.';
+    return err.message || 'Unknown location error.';
+  }
+
+  function getPosition() {
+    return new Promise((resolve, reject) => {
+      if (!('geolocation' in navigator)) {
+        reject(new Error('Geolocation is not supported by this browser.'));
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (p) => resolve({ lat: p.coords.latitude, lon: p.coords.longitude }),
+        (e) => reject(new Error(geoMessage(e))),
+        { enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 }
+      );
+    });
+  }
+
+  async function refresh() {
+    const seq = ++state.seq;
+    setNotice('');
+    renderLoading();
+
+    let coords;
+    let source;
+    if (state.demo) {
+      coords = { lat: DEMO_COORDS.lat, lon: DEMO_COORDS.lon };
+      source = 'demo';
+    } else {
+      try {
+        coords = await getPosition();
+        source = 'gps';
+      } catch (geoErr) {
+        if (seq === state.seq) renderGeoFailure(geoErr.message);
+        return;
+      }
+    }
+
+    try {
+      const params = new URLSearchParams({
+        lat: coords.lat.toFixed(6),
+        lon: coords.lon.toFixed(6),
+        heavy_rain: String($('rain-toggle').checked),
+      });
+      const scenario = SCENARIOS[$('scenario').value];
+      if (scenario) {
+        params.set('hour', String(scenario.hour));
+        params.set('day_of_week', String(scenario.dow));
+      }
+      const res = await fetch(`${API_BASE}/api/score?${params.toString()}`, { headers: { Accept: 'application/json' } });
+      if (!res.ok) {
+        let detail = `Server responded with ${res.status}.`;
+        try {
+          const body = await res.json();
+          if (body && typeof body.detail === 'string') detail = body.detail;
+        } catch (_) { /* non-JSON error body */ }
+        throw new Error(detail);
+      }
+      const data = await res.json();
+      if (seq !== state.seq) return;
+      renderResult(data, source, coords);
+    } catch (err) {
+      if (seq !== state.seq) return;
+      const offline = err instanceof TypeError;
+      renderError(offline ? 'Cannot reach the GhostBuster API. Is the server running on port 8000?' : err.message);
+    }
+  }
+
+  function persistDemo(on) {
+    try { localStorage.setItem(DEMO_STORAGE_KEY, on ? '1' : '0'); } catch (_) { /* storage unavailable */ }
+  }
+
+  function readDemo() {
+    try { return localStorage.getItem(DEMO_STORAGE_KEY) === '1'; } catch (_) { return false; }
+  }
+
+  function applyDemoUI() {
+    const toggle = $('demo-toggle');
+    toggle.setAttribute('aria-checked', String(state.demo));
+    $('demo-toggle-label').textContent = state.demo ? 'Demo ON' : 'Demo OFF';
+    $('demo-banner').classList.toggle('hidden', !state.demo);
+    $('demo-panel').classList.toggle('demo-on', state.demo);
+  }
+
+  function setDemo(on, { applyPreset = true } = {}) {
+    state.demo = on;
+    persistDemo(on);
+    if (on && applyPreset) {
+      $('scenario').value = 'pm_peak';
+      $('rain-toggle').checked = true;
+    }
+    applyDemoUI();
+    refresh();
+  }
+
+  async function loadHealth() {
+    try {
+      const res = await fetch(`${API_BASE}/api/health`);
+      if (!res.ok) throw new Error('health failed');
+      const h = await res.json();
+      const auc = h.ml && h.ml.roc_auc ? ` · AUC ${h.ml.roc_auc}` : '';
+      const src = h.ml && h.ml.data_source ? ` · ${h.ml.data_source} training data` : '';
+      $('footer').textContent = `Engine v${h.ml?.version ?? '?'} · RandomForest (CPU)${auc}${src} · ${h.stop_count} stops indexed`;
+    } catch (_) {
+      $('footer').textContent = 'Engine status unavailable.';
+    }
+  }
+
+  function init() {
+    document.addEventListener('click', (e) => {
+      const target = e.target.closest('[data-action]');
+      if (!target) return;
+      const action = target.dataset.action;
+      if (action === 'toggle-demo') setDemo(!state.demo);
+      else if (action === 'enable-demo') setDemo(true);
+      else if (action === 'refresh') refresh();
+    });
+    $('scenario').addEventListener('change', refresh);
+    $('rain-toggle').addEventListener('change', refresh);
+    document.addEventListener('keydown', (e) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const tag = (e.target && e.target.tagName) || '';
+      if (['INPUT', 'SELECT', 'TEXTAREA'].includes(tag)) return;
+      if (e.key === 'd' || e.key === 'D') setDemo(!state.demo);
+    });
+
+    state.demo = readDemo();
+    if (state.demo) {
+      $('scenario').value = 'pm_peak';
+      $('rain-toggle').checked = true;
+    }
+    applyDemoUI();
+    loadHealth();
+    refresh();
+  }
+
+  init();
+})();

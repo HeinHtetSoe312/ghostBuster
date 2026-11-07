@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GhostBuster - Predictive Transit Reliability</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { theme: { extend: { fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] } } } };
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body class="min-h-full bg-slate-950 font-sans text-slate-100 antialiased">
+  <div class="bg-ambient fixed inset-0 -z-10"></div>
+
+  <div id="demo-banner" class="hidden bg-amber-500 px-4 py-2 text-center text-xs font-bold uppercase tracking-widest text-slate-950">
+    Stage Demo Mode Active - coordinates locked to Patrick Street, Cork
+  </div>
+
+  <div class="mx-auto max-w-6xl px-4 py-6 sm:py-10">
+    <header class="mb-6 flex flex-wrap items-center justify-between gap-3">
+      <div class="flex items-center gap-3">
+        <div class="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/5 text-2xl ring-1 ring-white/10">👻</div>
+        <div>
+          <h1 class="text-2xl font-extrabold tracking-tight sm:text-3xl">GhostBuster</h1>
+          <p class="text-sm text-slate-400">Predictive transit reliability for Irish commuters</p>
+        </div>
+      </div>
+      <div id="source-pill" class="glass rounded-full px-4 py-2 text-xs font-medium text-slate-300">Locating...</div>
+    </header>
+
+    <section id="demo-panel" class="glass mb-4 flex flex-col justify-between gap-4 rounded-2xl p-4 sm:flex-row sm:items-center sm:p-5">
+      <div>
+        <p class="text-xs font-bold uppercase tracking-widest text-amber-300">Stage Demo Mode Override</p>
+        <p class="mt-1 text-sm text-slate-300">
+          Forces coordinates to <span class="font-mono text-slate-100">Patrick Street, Cork (51.8988, -8.4715)</span>,
+          bypasses GPS, and loads an evening-rush + heavy-rain scenario. <span class="text-slate-500">Shortcut: press D</span>
+        </p>
+      </div>
+      <button id="demo-toggle" type="button" role="switch" aria-checked="false" data-action="toggle-demo"
+        class="demo-switch flex shrink-0 items-center gap-3 rounded-xl bg-white/5 px-4 py-3 text-sm font-bold ring-1 ring-white/10 hover:bg-white/10">
+        <span class="switch-track"><span class="switch-thumb"></span></span>
+        <span id="demo-toggle-label">Demo OFF</span>
+      </button>
+    </section>
+
+    <section class="glass mb-6 flex flex-wrap items-center gap-4 rounded-2xl p-4">
+      <label class="flex items-center gap-2 text-sm text-slate-300">
+        <span class="text-xs uppercase tracking-wider text-slate-500">Time</span>
+        <select id="scenario" class="rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-400">
+          <option value="live">Live (now, Irish time)</option>
+          <option value="am_peak">Tue 08:00 - morning rush</option>
+          <option value="pm_peak">Thu 17:00 - evening rush</option>
+          <option value="late">Sat 01:00 - late night</option>
+          <option value="sunday">Sun 11:00 - reduced service</option>
+        </select>
+      </label>
+      <label class="flex cursor-pointer items-center gap-2 text-sm text-slate-300">
+        <input id="rain-toggle" type="checkbox" class="h-4 w-4 accent-sky-400" />
+        <span>🌧️ Heavy rain</span>
+      </label>
+      <button type="button" data-action="refresh"
+        class="ml-auto rounded-lg bg-sky-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-300">
+        Refresh score
+      </button>
+    </section>
+
+    <div id="notice" class="mb-4 hidden"></div>
+
+    <main class="grid gap-6 lg:grid-cols-5">
+      <section id="score-card" class="glass rounded-3xl p-6 lg:col-span-2" aria-live="polite"></section>
+      <section class="glass rounded-3xl p-6 lg:col-span-3" aria-live="polite">
+        <h2 class="mb-1 text-lg font-bold">Smarter stops nearby</h2>
+        <p class="mb-4 text-sm text-slate-400">When your stop turns subprime, GhostBuster scores walkable alternatives at your arrival time.</p>
+        <div id="alternatives"></div>
+        <div id="context" class="mt-5 flex flex-wrap gap-2 text-xs"></div>
+      </section>
+    </main>
+
+    <footer id="footer" class="mt-8 text-center text-xs text-slate-500">Loading engine status...</footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
