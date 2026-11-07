@@ -7,8 +7,10 @@
   const SCORE_MIN = 300;
   const SCORE_MAX = 850;
   const DEMO_STORAGE_KEY = 'ghostbuster.demo';
-  const GEOLOCATION_TIMEOUT_MS = 30000;
+  const GEOLOCATION_CACHE_TIMEOUT_MS = 8000;
+  const GEOLOCATION_TIMEOUT_MS = 22000;
   const GEOLOCATION_MAX_AGE_MS = 300000;
+  const NETWORK_LOCATION_TIMEOUT_MS = 8000;
 
   const TIER = {
     prime: { color: '#22c55e', text: 'text-emerald-400', bg: 'bg-emerald-500/15', name: 'PRIME' },
@@ -93,6 +95,9 @@
     if (source === 'demo') {
       pill.className = 'rounded-full bg-amber-500 px-4 py-2 text-xs font-bold text-slate-950';
       pill.textContent = `STAGE DEMO · ${DEMO_COORDS.label}`;
+    } else if (source === 'network') {
+      pill.className = 'glass rounded-full px-4 py-2 text-xs font-medium text-amber-300';
+      pill.textContent = `Approx. network location · ${coords.lat.toFixed(4)}, ${coords.lon.toFixed(4)}`;
     } else {
       pill.className = 'glass rounded-full px-4 py-2 text-xs font-medium text-emerald-300';
       pill.textContent = `Live GPS · ${coords.lat.toFixed(4)}, ${coords.lon.toFixed(4)}`;
@@ -196,26 +201,73 @@
     return err.message || 'Unknown location error.';
   }
 
-  function getPosition() {
+  function requestPosition(options) {
     return new Promise((resolve, reject) => {
-      if (!('geolocation' in navigator)) {
-        reject(new Error('Geolocation is not supported by this browser.'));
-        return;
-      }
-      if (location.protocol === 'file:') {
-        reject(new Error('Open the app at http://127.0.0.1:8000 so your browser can provide a location.'));
-        return;
-      }
+      const timer = setTimeout(() => reject(new Error('Locating timed out.')), options.timeout);
+      const succeed = (position) => {
+        clearTimeout(timer);
+        resolve({ lat: position.coords.latitude, lon: position.coords.longitude });
+      };
+      const fail = (error) => {
+        clearTimeout(timer);
+        reject(new Error(geoMessage(error)));
+      };
       navigator.geolocation.getCurrentPosition(
-        (p) => resolve({ lat: p.coords.latitude, lon: p.coords.longitude }),
-        (e) => reject(new Error(geoMessage(e))),
-        {
-          enableHighAccuracy: false,
-          timeout: GEOLOCATION_TIMEOUT_MS,
-          maximumAge: GEOLOCATION_MAX_AGE_MS,
-        }
+        succeed,
+        fail,
+        options
       );
     });
+  }
+
+  async function getPosition() {
+    if (!('geolocation' in navigator)) {
+      throw new Error('Geolocation is not supported by this browser.');
+    }
+    if (location.protocol === 'file:') {
+      throw new Error('Open the app at http://127.0.0.1:8000 so your browser can provide a location.');
+    }
+    if (window.isSecureContext === false && !['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) {
+      throw new Error('Location requires HTTPS, or open the app locally at http://127.0.0.1:8000.');
+    }
+
+    try {
+      return await requestPosition({
+        enableHighAccuracy: false,
+        timeout: GEOLOCATION_CACHE_TIMEOUT_MS,
+        maximumAge: GEOLOCATION_MAX_AGE_MS,
+      });
+    } catch (firstError) {
+      if (firstError.message.includes('permission') || firstError.message.includes('not supported')) {
+        throw firstError;
+      }
+      return requestPosition({
+        enableHighAccuracy: true,
+        timeout: GEOLOCATION_TIMEOUT_MS,
+        maximumAge: 0,
+      });
+    }
+  }
+
+  async function getNetworkPosition() {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), NETWORK_LOCATION_TIMEOUT_MS);
+    try {
+      const response = await fetch('https://ipapi.co/json/', {
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`Network location service responded with ${response.status}.`);
+      const data = await response.json();
+      const lat = Number(data.latitude);
+      const lon = Number(data.longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+        throw new Error('Network location service returned invalid coordinates.');
+      }
+      return { lat, lon };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async function refresh() {
@@ -233,8 +285,15 @@
         coords = await getPosition();
         source = 'gps';
       } catch (geoErr) {
-        if (seq === state.seq) renderGeoFailure(geoErr.message);
-        return;
+        try {
+          coords = await getNetworkPosition();
+          source = 'network';
+        } catch (networkErr) {
+          if (seq === state.seq) {
+            renderGeoFailure(`${geoErr.message} Network location was also unavailable.`);
+          }
+          return;
+        }
       }
     }
 
