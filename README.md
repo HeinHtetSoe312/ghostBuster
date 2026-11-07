@@ -23,4 +23,6 @@ amber alternatives (Parnell Place, Merchant's Quay, Anglesea Street).
 ## Notes
 - Training data is synthetic; stop coordinates and routes are approximate. See ROADMAP.md for the NTA GTFS-Realtime plan.
 - The UI loads Tailwind and the Inter font from CDNs, so the demo machine needs internet access (the API itself is fully local).
-- Browser geolocation works on http://127.0.0.1 / localhost.
+- Start the app with `run.bat` or `run.sh` and open http://127.0.0.1:8000; do not open `frontend/index.html` directly, because browsers block geolocation from `file:` pages.
+- Browser geolocation may take up to 30 seconds on the first request while the browser resolves the device position. If it times out, use **Try locating again** after checking the browser's location permission.
+- Live scoring currently covers only the seeded Cork, Dublin, and Galway stops. If GPS succeeds outside those areas, the UI shows the detected coordinates instead of treating the location as unavailable.

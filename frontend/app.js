@@ -7,6 +7,8 @@
   const SCORE_MIN = 300;
   const SCORE_MAX = 850;
   const DEMO_STORAGE_KEY = 'ghostbuster.demo';
+  const GEOLOCATION_TIMEOUT_MS = 30000;
+  const GEOLOCATION_MAX_AGE_MS = 300000;
 
   const TIER = {
     prime: { color: '#22c55e', text: 'text-emerald-400', bg: 'bg-emerald-500/15', name: 'PRIME' },
@@ -163,12 +165,27 @@
         <p class="text-4xl">📍</p>
         <p class="mt-3 font-semibold">Location unavailable</p>
         <p class="mt-1 text-sm text-slate-400">${esc(message)}</p>
+        <button type="button" data-action="retry-location" class="mt-5 rounded-xl bg-sky-500 px-5 py-3 text-sm font-bold text-slate-950 hover:bg-sky-400">Try locating again</button>
         <button type="button" data-action="enable-demo" class="mt-5 rounded-xl bg-amber-500 px-5 py-3 text-sm font-bold text-slate-950 hover:bg-amber-400">Switch to Stage Demo Mode</button>
       </div>`;
     $('alternatives').innerHTML = '';
     $('context').innerHTML = '';
     $('source-pill').className = 'glass rounded-full px-4 py-2 text-xs font-medium text-red-300';
     $('source-pill').textContent = 'No location';
+  }
+
+  function renderCoverageFailure(message, coords) {
+    $('score-card').innerHTML = `
+      <div class="py-8 text-center">
+        <p class="text-4xl">🚌</p>
+        <p class="mt-3 font-semibold">Live location found</p>
+        <p class="mt-1 text-sm text-slate-400">${esc(message)}</p>
+        <p class="mt-3 text-xs text-slate-500">GPS: ${coords.lat.toFixed(4)}, ${coords.lon.toFixed(4)}</p>
+        <button type="button" data-action="retry-location" class="mt-5 rounded-xl bg-sky-500 px-5 py-3 text-sm font-bold text-slate-950 hover:bg-sky-400">Refresh location</button>
+      </div>`;
+    $('alternatives').innerHTML = '';
+    $('context').innerHTML = '';
+    renderSourcePill('gps', coords);
   }
 
   function geoMessage(err) {
@@ -185,10 +202,18 @@
         reject(new Error('Geolocation is not supported by this browser.'));
         return;
       }
+      if (location.protocol === 'file:') {
+        reject(new Error('Open the app at http://127.0.0.1:8000 so your browser can provide a location.'));
+        return;
+      }
       navigator.geolocation.getCurrentPosition(
         (p) => resolve({ lat: p.coords.latitude, lon: p.coords.longitude }),
         (e) => reject(new Error(geoMessage(e))),
-        { enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 }
+        {
+          enableHighAccuracy: false,
+          timeout: GEOLOCATION_TIMEOUT_MS,
+          maximumAge: GEOLOCATION_MAX_AGE_MS,
+        }
       );
     });
   }
@@ -231,13 +256,19 @@
           const body = await res.json();
           if (body && typeof body.detail === 'string') detail = body.detail;
         } catch (_) { /* non-JSON error body */ }
-        throw new Error(detail);
+        const error = new Error(detail);
+        error.status = res.status;
+        throw error;
       }
       const data = await res.json();
       if (seq !== state.seq) return;
       renderResult(data, source, coords);
     } catch (err) {
       if (seq !== state.seq) return;
+      if (source === 'gps' && err.status === 404) {
+        renderCoverageFailure(err.message, coords);
+        return;
+      }
       const offline = err instanceof TypeError;
       renderError(offline ? 'Cannot reach the GhostBuster API. Is the server running on port 8000?' : err.message);
     }
@@ -290,6 +321,7 @@
       const action = target.dataset.action;
       if (action === 'toggle-demo') setDemo(!state.demo);
       else if (action === 'enable-demo') setDemo(true);
+      else if (action === 'retry-location') refresh();
       else if (action === 'refresh') refresh();
     });
     $('scenario').addEventListener('change', refresh);
