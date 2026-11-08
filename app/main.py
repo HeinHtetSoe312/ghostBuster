@@ -8,10 +8,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
+from app.live_data import WeatherClient
 from app.ml_engine import GhostPredictor
 from app.recommender import Recommender
 from app.routers.api import router as api_router
-from app.stops_registry import STOPS, StopRegistry
+from app.stops_registry import StopRegistry, load_stops
 
 logger = logging.getLogger("ghostbuster")
 
@@ -23,8 +24,9 @@ async def lifespan(app: FastAPI):
             f"Model artifact missing at {settings.model_path}. Run `python train_model.py` first."
         )
     predictor = GhostPredictor(settings.model_path, settings)
-    registry = StopRegistry(STOPS)
+    registry = StopRegistry(load_stops(settings.stops_path))
     app.state.recommender = Recommender(predictor, registry, settings)
+    app.state.weather = WeatherClient()
     logger.info(
         "GhostBuster ready: model v%s, %d stops indexed", predictor.version, len(registry)
     )

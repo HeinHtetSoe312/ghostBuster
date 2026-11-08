@@ -7,10 +7,12 @@
   const SCORE_MIN = 300;
   const SCORE_MAX = 850;
   const DEMO_STORAGE_KEY = 'ghostbuster.demo';
-  const GEOLOCATION_CACHE_TIMEOUT_MS = 8000;
-  const GEOLOCATION_TIMEOUT_MS = 22000;
-  const GEOLOCATION_MAX_AGE_MS = 300000;
-  const NETWORK_LOCATION_TIMEOUT_MS = 8000;
+  const GEOLOCATION_CACHE_TIMEOUT_MS = 1200;
+  const GEOLOCATION_TIMEOUT_MS = 6000;
+  const GEOLOCATION_MAX_AGE_MS = 30000;
+  const MAX_PRECISE_CACHE_ACCURACY_M = 150;
+  const MAX_USABLE_LOCATION_ACCURACY_M = 300;
+  const NETWORK_LOCATION_TIMEOUT_MS = 4000;
 
   const TIER = {
     prime: { color: '#22c55e', text: 'text-emerald-400', bg: 'bg-emerald-500/15', name: 'PRIME' },
@@ -28,6 +30,8 @@
 
   const state = { demo: false, seq: 0 };
   const $ = (id) => document.getElementById(id);
+  const hasUsableAccuracy = (coords, maxMeters) =>
+    Number.isFinite(coords.accuracy) && coords.accuracy <= maxMeters;
 
   const esc = (value) =>
     String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -99,8 +103,14 @@
       pill.className = 'glass rounded-full px-4 py-2 text-xs font-medium text-amber-300';
       pill.textContent = `Approx. network location · ${coords.lat.toFixed(4)}, ${coords.lon.toFixed(4)}`;
     } else {
-      pill.className = 'glass rounded-full px-4 py-2 text-xs font-medium text-emerald-300';
-      pill.textContent = `Live GPS · ${coords.lat.toFixed(4)}, ${coords.lon.toFixed(4)}`;
+      const accuracy = Number.isFinite(coords.accuracy)
+        ? ` · ±${Math.round(coords.accuracy)} m`
+        : '';
+      const quality = Number.isFinite(coords.accuracy) && coords.accuracy > 200 ? ' (low accuracy)' : '';
+      pill.className = `glass rounded-full px-4 py-2 text-xs font-medium ${
+        quality ? 'text-amber-300' : 'text-emerald-300'
+      }`;
+      pill.textContent = `Live GPS${quality}${accuracy} · ${coords.lat.toFixed(4)}, ${coords.lon.toFixed(4)}`;
     }
   }
 
@@ -148,7 +158,11 @@
     const chip = (text, cls = 'bg-white/5 text-slate-300') => `<span class="rounded-full px-3 py-1 ${cls}">${text}</span>`;
     $('context').innerHTML = [
       chip(`🕒 ${esc(c.local_time_label)}`),
-      chip(c.heavy_rain ? '🌧️ Heavy rain' : '☀️ No heavy rain', c.heavy_rain ? 'bg-sky-500/15 text-sky-300' : 'bg-white/5 text-slate-300'),
+      chip(`${c.heavy_rain ? '🌧️ Heavy rain' : '☀️ No heavy rain'} · ${esc(c.weather_source)}`, c.heavy_rain ? 'bg-sky-500/15 text-sky-300' : 'bg-white/5 text-slate-300'),
+      c.precipitation_mm !== null && c.precipitation_mm !== undefined
+        ? chip(`🌦️ ${c.precipitation_mm} mm`)
+        : '',
+      c.weather_error ? chip(`⚠️ ${esc(c.weather_error)}`, 'bg-amber-500/15 text-amber-300') : '',
       c.simulated ? chip('Simulated time', 'bg-violet-500/15 text-violet-300') : chip('Live time'),
     ].join('');
 
@@ -206,7 +220,11 @@
       const timer = setTimeout(() => reject(new Error('Locating timed out.')), options.timeout);
       const succeed = (position) => {
         clearTimeout(timer);
-        resolve({ lat: position.coords.latitude, lon: position.coords.longitude });
+        resolve({
+          lat: position.coords.latitude,
+          lon: position.coords.longitude,
+          accuracy: Number.isFinite(position.coords.accuracy) ? position.coords.accuracy : null,
+        });
       };
       const fail = (error) => {
         clearTimeout(timer);
@@ -231,22 +249,43 @@
       throw new Error('Location requires HTTPS, or open the app locally at http://127.0.0.1:8000.');
     }
 
-    try {
-      return await requestPosition({
-        enableHighAccuracy: false,
-        timeout: GEOLOCATION_CACHE_TIMEOUT_MS,
-        maximumAge: GEOLOCATION_MAX_AGE_MS,
-      });
-    } catch (firstError) {
-      if (firstError.message.includes('permission') || firstError.message.includes('not supported')) {
-        throw firstError;
-      }
-      return requestPosition({
-        enableHighAccuracy: true,
-        timeout: GEOLOCATION_TIMEOUT_MS,
-        maximumAge: 0,
-      });
+    const cachedPromise = requestPosition({
+      enableHighAccuracy: false,
+      timeout: GEOLOCATION_CACHE_TIMEOUT_MS,
+      maximumAge: GEOLOCATION_MAX_AGE_MS,
+    }).then((coords) => ({ kind: 'cached', coords })).catch((error) => ({ kind: 'error', error }));
+    const freshPromise = requestPosition({
+      enableHighAccuracy: true,
+      timeout: GEOLOCATION_TIMEOUT_MS,
+      maximumAge: 0,
+    }).then((coords) => ({ kind: 'fresh', coords })).catch((error) => ({ kind: 'error', error }));
+
+    const first = await Promise.race([cachedPromise, freshPromise]);
+    if (
+      first.kind === 'fresh' &&
+      hasUsableAccuracy(first.coords, MAX_USABLE_LOCATION_ACCURACY_M)
+    ) {
+      return first.coords;
     }
+    if (first.kind === 'cached' && hasUsableAccuracy(first.coords, MAX_PRECISE_CACHE_ACCURACY_M)) {
+      return first.coords;
+    }
+
+    const results = await Promise.all([cachedPromise, freshPromise]);
+    const fresh = results.find((result) => result.kind === 'fresh');
+    const cached = results.find((result) => result.kind === 'cached');
+    if (fresh && hasUsableAccuracy(fresh.coords, MAX_USABLE_LOCATION_ACCURACY_M)) return fresh.coords;
+    if (cached && hasUsableAccuracy(cached.coords, MAX_USABLE_LOCATION_ACCURACY_M)) return cached.coords;
+    if (fresh || cached) {
+      const accuracy = (fresh || cached).coords.accuracy;
+      throw new Error(
+        `Your browser only provided an approximate location${
+          Number.isFinite(accuracy) ? ` (±${Math.round(accuracy)} m)` : ''
+        }. ` +
+          'Enable precise location services and try again.'
+      );
+    }
+    throw first.error;
   }
 
   async function getNetworkPosition() {
@@ -278,13 +317,17 @@
     let coords;
     let source;
     if (state.demo) {
-      coords = { lat: DEMO_COORDS.lat, lon: DEMO_COORDS.lon };
+      coords = { lat: DEMO_COORDS.lat, lon: DEMO_COORDS.lon, accuracy: 0 };
       source = 'demo';
     } else {
       try {
         coords = await getPosition();
         source = 'gps';
       } catch (geoErr) {
+        if (geoErr.message.startsWith('Your browser only provided an approximate location')) {
+          if (seq === state.seq) renderGeoFailure(geoErr.message);
+          return;
+        }
         try {
           coords = await getNetworkPosition();
           source = 'network';
@@ -301,8 +344,8 @@
       const params = new URLSearchParams({
         lat: coords.lat.toFixed(6),
         lon: coords.lon.toFixed(6),
-        heavy_rain: String($('rain-toggle').checked),
       });
+      if ($('rain-toggle').checked) params.set('heavy_rain', 'true');
       const scenario = SCENARIOS[$('scenario').value];
       if (scenario) {
         params.set('hour', String(scenario.hour));

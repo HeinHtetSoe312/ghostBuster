@@ -108,6 +108,10 @@ class Recommender:
         when: datetime,
         simulated: bool,
         heavy_rain: bool,
+        weather_source: str = "manual",
+        weather_error: str | None = None,
+        precipitation_mm: float | None = None,
+        weather_observed_at: str | None = None,
     ) -> Optional[ScoreResponse]:
         match = self.registry.nearest(lat, lon, self.cfg.max_match_radius_m)
         if match is None:
@@ -133,6 +137,10 @@ class Recommender:
                 heavy_rain=heavy_rain,
                 local_time_label=when.strftime("%a %H:%M"),
                 simulated=simulated,
+                weather_source=weather_source,
+                weather_error=weather_error,
+                precipitation_mm=precipitation_mm,
+                weather_observed_at=weather_observed_at,
             ),
             alternatives_triggered=triggered,
             alternatives=alternatives,

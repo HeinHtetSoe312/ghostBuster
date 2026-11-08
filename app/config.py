@@ -12,6 +12,7 @@ class Settings:
     version: str = "0.1.0"
 
     model_path: Path = BASE_DIR / "models" / "ghost_predictor.joblib"
+    stops_path: Path = BASE_DIR / "data" / "gtfs_stops.json"
     frontend_dir: Path = BASE_DIR / "frontend"
     timezone: str = "Europe/Dublin"
 

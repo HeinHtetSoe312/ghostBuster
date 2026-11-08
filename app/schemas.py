@@ -21,6 +21,10 @@ class ContextOut(BaseModel):
     heavy_rain: bool
     local_time_label: str
     simulated: bool
+    weather_source: str
+    weather_error: str | None = None
+    precipitation_mm: float | None = None
+    weather_observed_at: str | None = None
 
 
 class AlternativeOut(BaseModel):
